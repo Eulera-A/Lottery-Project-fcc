@@ -6,21 +6,30 @@
 
 // SPDX-License-Identifier: MIT
 
+// youtube at 14:57:37
 pragma solidity ^0.8.7;
 
 import "@chainlink/contracts/src/v0.8/vrf/interfaces/VRFCoordinatorV2Interface.sol";
 import "@chainlink/contracts/src/v0.8/vrf/VRFConsumerBaseV2.sol";
-// In the video, we use the following import statement, but newer versions of the Chainlink
-// contracts have a different file structure.
-// import "@chainlink/contracts/src/v0.8/VRFConsumerBaseV2.sol";
 import "@chainlink/contracts/src/v0.8/automation/interfaces/AutomationCompatibleInterface.sol";
 import "hardhat/console.sol";
 
 error Raffle__NotEnoughETHEntered();
 error Raffle__TransferFailed();
 error Raffle__NotOpen();
+error Raffle__UpKeepNotNeeded(
+    uint256 currentBalance,
+    uint256 numPlayers,
+    uint256 raffleState
+);
 
-contract Raffle is VRFConsumerBaseV2 {
+/**
+ * @title A sample Raffle Contract
+ * @author Eulera-A
+ * @notice Lottery, utilizing random num generator
+ */
+
+contract Raffle is VRFConsumerBaseV2, AutomationCompatibleInterface {
     /* Type declare */
     enum RaffleState {
         OPEN, // => p 0 = open, 1 = calculating, 2 = ...
@@ -36,7 +45,6 @@ contract Raffle is VRFConsumerBaseV2 {
 
     uint16 private constant REQUEST_CONFIRMATIONS = 3;
     uint32 private constant NUM_WORDS = 1;
-    uint256 private s_lastTimeStamp;
 
     /*  Lottery Variables */
     uint256 private immutable i_entranceFee;
@@ -44,14 +52,17 @@ contract Raffle is VRFConsumerBaseV2 {
     address private s_recentWinner;
     RaffleState private s_raffleState;
     uint256 private immutable i_interval;
+    uint256 private s_lastTimeStamp;
 
     /*  events */
-
     event RaffleEnter(address indexed player);
     event RequestedRaffleWinner(uint256 indexed requestId);
     event WinnerPicked(address indexed winner);
 
-    constructor( //construct function takes in args/input by users
+    /* functions */
+
+    constructor(
+        //construct function takes in args/input by users
         address vrfCoordinatorV2,
         uint256 entranceFee,
         bytes32 gasLane,
@@ -94,16 +105,30 @@ contract Raffle is VRFConsumerBaseV2 {
 
      */
 
-    function checkUpKeep(bytes calldata /* checkData */) external override {
+    function checkUpkeep(
+        bytes memory /* checkData */
+    ) public view override returns (bool upkeepNeeded, bytes memory) {
         bool isOpen = (RaffleState.OPEN == s_raffleState);
         // check time stamp:
-        bool timePassed = ((block.timestamp - s_lastTimeStamp) > i_interval)
+        bool timePassed = ((block.timestamp - s_lastTimeStamp) > i_interval);
+        bool hasPlayers = (s_players.length > 0);
+        bool hasBalance = (address(this).balance > 0);
+        upkeepNeeded = (isOpen && timePassed && hasPlayers && hasBalance);
     }
 
-    function requestRandomWinner() external {
+    function performUpkeep(bytes calldata /* performData */) external override {
         // request the random number
         // once we get it, do something
         // 2 tx process
+        (bool upkeepNeeded, ) = checkUpkeep("");
+        if (!upkeepNeeded) {
+            revert Raffle__UpKeepNotNeeded(
+                address(this).balance,
+                s_players.length,
+                uint256(s_raffleState)
+            );
+        }
+
         s_raffleState = RaffleState.CALCULATING;
 
         uint256 requestId = i_vrfCoordinator.requestRandomWords(
@@ -128,6 +153,7 @@ contract Raffle is VRFConsumerBaseV2 {
         s_recentWinner = recentWinner;
         s_raffleState = RaffleState.OPEN;
         s_players = new address payable[](0);
+        s_lastTimeStamp = block.timestamp;
 
         (bool success, ) = recentWinner.call{value: address(this).balance}(""); //sending the winner all the money on this contract
         if (!success) {
@@ -147,5 +173,25 @@ contract Raffle is VRFConsumerBaseV2 {
 
     function getRecentWinner() public view returns (address) {
         return s_recentWinner;
+    }
+
+    function getRaffleState() public view returns (RaffleState) {
+        return s_raffleState;
+    }
+
+    function getNumWords() public pure returns (uint256) {
+        return NUM_WORDS;
+    }
+
+    function getNumOfPlayers() public view returns (uint256) {
+        return s_players.length;
+    }
+
+    function getLatestTimeStamp() public view returns (uint256) {
+        return s_lastTimeStamp;
+    }
+
+    function getRequestConfirmations() public pure returns (uint256) {
+        return REQUEST_CONFIRMATIONS;
     }
 }
